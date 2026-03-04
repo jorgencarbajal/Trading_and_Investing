@@ -1,2 +1,6 @@
 quantconnect/
 Strategies/
+.venv/
+build/
+*.egg-info/
+__pycache__/

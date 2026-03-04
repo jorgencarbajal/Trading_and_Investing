@@ -1,0 +1,12 @@
+[project]
+name = "trading-and-investing"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.13"
+dependencies = [
+    "ib-insync>=0.9.86",
+    "numpy>=2.4.2",
+    "pandas>=3.0.1",
+    "ta-lib>=0.6.8",
+    "tqdm>=4.67.3",
+]
