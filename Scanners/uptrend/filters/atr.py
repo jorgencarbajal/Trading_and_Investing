@@ -1,21 +1,22 @@
 # LIBRARIES ***************************************************************************************
 from ib_insync import *  # For connecting to Interactive Brokers TWS API
 import pandas as pd  # For handling the stock list and data manipulation
-import talib  # For calculating Simple Moving Average (SMA)
+import talib  # For calculating Average True Range (ATR)
 import time  # For adding delays to respect IB API rate limits
 from tqdm import tqdm  # For progress bar tracking
+import numpy as np  # For NaN checks in ATR calculations
 
-# FUNCTION TO FILTER STOCKS BY 200 SMA BELOW 50 SMA **********************************************
-def filter_by_200sma_below_50sma(csv_file, sma_short=50, sma_long=200, data_days=200):
+# FUNCTION TO FILTER STOCKS BY ATR ***************************************************************
+def filter_by_atr(csv_file, min_atr=1.0, atr_period=14, data_days=50):
     """
-    Filter stocks from a CSV file where the 200-day SMA is below the 50-day SMA.
+    Filter stocks from a CSV file based on the latest Average True Range (ATR) value.
     Args:
         csv_file (str): Path to the CSV file with stock symbols
-        sma_short (int): Period for shorter SMA (default: 50)
-        sma_long (int): Period for longer SMA (default: 200)
-        data_days (int): Number of days of historical data to fetch (default: 200)
+        min_atr (float): Minimum ATR value (default: 1.0)
+        atr_period (int): Period for ATR calculation (default: 14)
+        data_days (int): Number of days of historical data to fetch (should be > atr_period * 2 for accuracy)
     Returns:
-        pd.DataFrame: Filtered DataFrame with stocks where 200 SMA < 50 SMA
+        pd.DataFrame: Filtered DataFrame with stocks where latest ATR > min_atr
     """
     # Read the CSV file containing stock symbols
     df = pd.read_csv(csv_file)
@@ -36,9 +37,9 @@ def filter_by_200sma_below_50sma(csv_file, sma_short=50, sma_long=200, data_days
         total_symbols = len(df)
         
         # Loop through each stock symbol with progress bar
-        for symbol in tqdm(df['Symbol'], total=total_symbols, desc="Scanning stocks for 200 SMA < 50 SMA"):
+        for symbol in tqdm(df['Symbol'], total=total_symbols, desc="Scanning stocks for ATR"):
             try:
-                # Create a Stock contract (US stock, SMART exchange)
+                # Create a Stock contract (US stock, SMART exchange for broader coverage)
                 contract = Stock(symbol, 'SMART', 'USD', primaryExchange='NYSE')
                 
                 # Qualify the contract
@@ -59,32 +60,35 @@ def filter_by_200sma_below_50sma(csv_file, sma_short=50, sma_long=200, data_days
                         keepUpToDate=False
                     )
                     
-                    if bars and len(bars) >= sma_long:
+                    if bars and len(bars) >= atr_period:
                         # Convert bars to DataFrame
                         hist_data = util.df(bars)
                         
-                        # Calculate SMAs
-                        sma_50 = talib.SMA(hist_data['close'].values, timeperiod=sma_short)
-                        sma_200 = talib.SMA(hist_data['close'].values, timeperiod=sma_long)
-                        latest_sma_50 = sma_50[-1]
-                        latest_sma_200 = sma_200[-1]
+                        # Calculate ATR using TA-Lib
+                        atr_values = talib.ATR(
+                            hist_data['high'].values,
+                            hist_data['low'].values,
+                            hist_data['close'].values,
+                            timeperiod=atr_period
+                        )
+                        latest_atr = atr_values[-1]
                         
-                        # Check if 200 SMA is below 50 SMA
-                        if latest_sma_200 < latest_sma_50:
+                        # Check if ATR is valid and exceeds threshold
+                        if not np.isnan(latest_atr) and latest_atr > min_atr:
                             stock_data = df[df['Symbol'] == symbol].to_dict('records')[0]
                             filtered_stocks.append(stock_data)
-                            print(f"✓ {symbol}: SMA200 {latest_sma_200:.2f} < SMA50 {latest_sma_50:.2f} (passed)")
+                            print(f"✓ {symbol}: ATR {latest_atr:.2f} (passed)")
                         else:
-                            print(f"✗ {symbol}: SMA200 {latest_sma_200:.2f} >= SMA50 {latest_sma_50:.2f}")
+                            print(f"✗ {symbol}: ATR {latest_atr:.2f} <= {min_atr} or invalid")
                     else:
-                        print(f"✗ {symbol}: Insufficient data (need at least {sma_long} bars)")
+                        print(f"✗ {symbol}: Insufficient data (need at least {atr_period} bars)")
                 else:
                     print(f"✗ {symbol}: Invalid contract")
                     
             except Exception as e:
                 print(f"✗ {symbol}: Error - {str(e)[:50]}...")
             
-            # Delay for IB API rate limits
+            # Delay for API rate limits (0.2s for ~5 req/s)
             time.sleep(0.2)
         
         # Convert filtered stocks to DataFrame
@@ -101,19 +105,25 @@ def filter_by_200sma_below_50sma(csv_file, sma_short=50, sma_long=200, data_days
 
 # MAIN SCRIPT ************************************************************************************
 if __name__ == "__main__":
-    # Input CSV file
-    csv_file = r'C:\Users\jorge_388iox0\OneDrive\OneDrive\Trading\QuantitativeTrading\Scanners\golden_stack_uptrend\nyse_50sma_below_20sma_stocks.csv'
+    # Path to the input CSV file
+    csv_file = r'C:\Users\jorge_388iox0\OneDrive\OneDrive\Trading\QuantitativeTrading\Scanners\golden_stack_uptrend\nyse_high_rel_volume_stocks.csv'
     
-    # Filter stocks
-    filtered_stocks = filter_by_200sma_below_50sma(csv_file, sma_short=50, sma_long=200, data_days=200)
+    # Filter stocks by ATR (>1, 14-period, fetching 50 days of data)
+    filtered_stocks = filter_by_atr(csv_file, min_atr=1.0, atr_period=14, data_days=50)
     
-    # Check if filtered DataFrame is not empty
+    # Check if the filtered DataFrame is not empty
     if not filtered_stocks.empty:
-        print(f"\nFound {len(filtered_stocks)} stocks with 200 SMA < 50 SMA:")
+        # Print the number of stocks meeting the ATR criterion
+        print(f"\nFound {len(filtered_stocks)} stocks with ATR > 1.0:")
+        
+        # Print the first few rows to verify
         print(filtered_stocks.head())
         
-        # Save to new CSV
-        filtered_stocks.to_csv('nyse_200sma_below_50sma_stocks.csv', index=False)
-        print("Saved to 'nyse_200sma_below_50sma_stocks.csv'")
+        # Save the filtered DataFrame to a new CSV file
+        output_path = r'C:\Users\jorge_388iox0\OneDrive\OneDrive\Trading\QuantitativeTrading\Scanners\golden_stack_uptrend\nyse_high_atr_stocks.csv'
+        filtered_stocks.to_csv(output_path, index=False)
+        
+        # Confirm the file was saved
+        print(f"Saved to '{output_path}'")
     else:
-        print("No stocks met the 200 SMA < 50 SMA criterion or an error occurred.")
+        print("No stocks met the ATR criterion or an error occurred.")
